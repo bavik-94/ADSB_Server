@@ -10,7 +10,7 @@ from tabulate import tabulate
 import websockets
 from db_helper import DBHelper as Db
 from aircraft import Aircraft as Ac
-
+from flights import Flights as Flt
 
 debug = False
 time_start = int(time.time())
@@ -22,7 +22,8 @@ async def init_state():
         result = await Db.query_init_state()
         if result:
             for entry in result:
-                await Ac.new_aircraft(entry)
+                await Flt.new_aircraft(entry)
+
             return
     print("\nDatabase has invalid data after 10 attempts... closing")
     sys.exit()
@@ -32,34 +33,41 @@ async def state_update():
     global debug
     while Db.valid_db:
         messages = await Db.query_state()
+
         for entry in messages:
-            _aircraft = await Ac.get_aircraft(entry['hex_ident'])
+            _aircraft = await Flt.get_aircraft(entry['hex_ident'])
             if _aircraft:  # existing aircraft
                 await _aircraft.update(entry)
             else:
-                await Ac.new_aircraft(entry)
+                await Flt.new_aircraft(entry)
 
-# clean up aircraft that haven't transmitted in 1 minute
-Ac.expired = [aircraft for aircraft in Ac.active if await aircraft.expired_check()]
-Ac.active = [aircraft for aircraft in Ac.active if aircraft not in Ac.expired]
+        # clean up aircraft that haven't transmitted in 1 minute
 
-# send state - only non expired and with valid lat lon alt
-if USERS:
-    message = [await x.get_values() for x in Ac.active if x.lon != 0]
-    message.append({'type': 'state'})
-    await asyncio.wait([user.send(json.dumps(message)) for user in USERS])
+        for aircraft in Flt.active:
+            if await aircraft.expired_check():
+                Flt.expired.append(aircraft)
 
-# print state to console
-if debug:
-    os.system('cls')
-    active, expired = await Ac.tables()
-    print("\nTime Elapsed: " + time.strftime("%H:%M:%S", time.gmtime(int(time.time() - time_start))))
-    print("\nActive Aircraft: " + str(len(active)))
-    print(tabulate(active, headers=active[0].keys()))
-    print("\nExpired Aircraft: " + str(len(expired)))
-    print(tabulate(expired, headers=expired[0].keys()))
+        Flt.active = [aircraft for aircraft in Flt.active if aircraft not in Flt.expired]
 
-await asyncio.sleep(2)
+        # send state - only non expired and with valid lat lon alt
+        if USERS:
+            message = [await x.get_values() for x in Flt.active if x.lon != 0]
+            message.append({'type': 'state'})
+            await asyncio.wait([user.send(json.dumps(message)) for user in USERS])
+
+        # print state to console
+        if debug:
+            os.system('cls')
+            active, expired = await Flt.tables()
+            print("\nTime Elapsed: " + time.strftime("%H:%M:%S", time.gmtime(int(time.time() - time_start))))
+            print("\nActive Aircraft: " + str(len(active)))
+            if active:
+                print(tabulate(active, headers={key: key for key in active[0].keys()}))
+            print("\nExpired Aircraft: " + str(len(expired)))
+            if expired:
+                print(tabulate(expired, headers={key: key for key in expired[0].keys()}))
+
+        await asyncio.sleep(2)
 
 
 async def register(websocket):
@@ -86,7 +94,7 @@ async def server(websocket, path):
         await unregister(websocket)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-d", "--debug", default=debug, help="Prints a table of the currently tracked aircraft")
+parser.add_argument("--debug", default=debug, help="Prints a table of the currently tracked aircraft", action="store_true")
 args = parser.parse_args()
 debug = args.debug
 
