@@ -9,7 +9,7 @@ class Aircraft:
         self.reg = kwargs['n_number']
         self.mfr = kwargs['manufacturer']
         self.model = kwargs['model']
-        self.callsign = None
+        self.callsign = kwargs['hex_ident']
         self.lat = kwargs['lat']
         self.lon = kwargs['lon']
         self.altitude = kwargs['altitude']
@@ -22,10 +22,8 @@ class Aircraft:
         self.first_seen = live
 
     async def update(self, db_data):
-        message = {key: db_data[key] for key in db_data.keys()}
-
-        for key, value in message.items():
-            if key not in ('transmission_type', 'parsed_time'):
+        for key, value in db_data.items():
+            if key not in ('rowid', 'transmission_type', 'parsed_time'):
                 if value != '':
                     setattr(self, key, value)
 
