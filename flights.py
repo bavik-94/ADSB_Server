@@ -1,6 +1,5 @@
 import time
 from db_helper import DBHelper as Db
-
 from aircraft import Aircraft as Ac
 
 
@@ -26,4 +25,6 @@ class Flights:
         active_table = [await aircraft.get_values() for aircraft in cls.active]
         expired_table = [await aircraft.get_values() for aircraft in cls.expired]
         return active_table, expired_table
+
+
 
