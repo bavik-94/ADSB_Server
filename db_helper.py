@@ -11,9 +11,12 @@ class DBHelper:
 
     @classmethod
     async def query_init_state(cls):
-        async with aiosqlite.connect(database) as db:  # build initial state from any transmission < 60 seconds old
+        async with aiosqlite.connect(database) as db:  # build initial state from any transmission < 10 seconds old
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * from activepos") as cursor:
+            query = """SELECT rowid, * from squitters 
+            WHERE replace(parsed_time, 'T', ' ') >= datetime('now', '-10 seconds')
+            """
+            async with db.execute(query) as cursor:
                 db_msg = []
                 async for row in cursor:
                     db_msg.append({key: row[key] for key in row.keys()})
@@ -26,26 +29,25 @@ class DBHelper:
                     return None
 
                 print("Connected to database successfully!")
-                async with db.execute("SELECT rowid FROM squitters ORDER BY ROWID DESC LIMIT 1") as cursor2:
-                    async for row in cursor2:
-                        cls.last_query = row['rowid']
+                row_ids = [entry['rowid'] for entry in db_msg]  # record end of last query
+                cls.last_query = max(row_ids)
                 cls.valid_db = True
                 return db_msg
 
     @classmethod
     async def query_state(cls):  # query database from the end of the last query
-        query_by_last = "SELECT * FROM squitters WHERE rowid >= ?"
+        query_by_last = "SELECT rowid, * FROM squitters WHERE rowid >= ?"
         async with aiosqlite.connect(database) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(query_by_last, (cls.last_query,)) as cursor:
-                messages = []
+                db_msg = []
                 async for line in cursor:
                     if line[1] is not None:  # need valid hex_ident
-                        messages.append(line)
-                async with db.execute("SELECT rowid FROM squitters ORDER BY ROWID DESC LIMIT 1") as cursor2:
-                    async for row in cursor2:
-                        cls.last_query = row['rowid']  # mark last time stamp of line block received
-                return messages
+                        db_msg.append({key: line[key] for key in line.keys()})
+
+                row_ids = [entry['rowid'] for entry in db_msg]  # record end of last query
+                cls.last_query = max(row_ids)
+                return db_msg
 
     @classmethod
     async def type_query(cls, hex_ident):  # returns FAA registry information and icon type for client live map
@@ -58,3 +60,24 @@ class DBHelper:
                             'model': line['model'], 'icon_type': line['icon_type']}
                 return {'n_number': None, 'manufacturer': None, 'model': None,
                         'icon_type': '_generic'}  # aircraft is not registered with the FAA
+
+    @classmethod
+    async def flight_history(cls, hex_ident):
+        async with aiosqlite.connect(database) as db:  # get aircraft that transmitted anything in the last minute
+            db.row_factory = aiosqlite.Row
+            search = """
+                                            SELECT hex_ident,lat,lon,altitude
+                                                FROM squitters
+                                                WHERE hex_ident = ? AND transmission_type = 3 AND replace(parsed_time, 'T', ' ') >= datetime('now', '-40 minutes')
+                            """
+            async with db.execute(search, (hex_ident,)) as cursor:
+                db_msg = []
+                async for line in cursor:
+                    db_msg.append({key: line[key] for key in line.keys()})
+                if not db_msg:
+                    return {'action': 'history', 'hex_ident': None}
+                lat = [x['lat'] for x in db_msg]
+                lon = [x['lon'] for x in db_msg]
+                alt = [x['altitude'] for x in db_msg]
+                history = [{'hex_ident': hex_ident, 'lat': lat, 'lon': lon, 'altitude': alt}, {'action': 'history'}]
+                return history
