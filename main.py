@@ -9,7 +9,6 @@ from tabulate import tabulate
 
 import websockets
 from db_helper import DBHelper as Db
-from aircraft import Aircraft as Ac
 from flights import Flights as Flt
 
 debug = False
@@ -19,10 +18,14 @@ USERS = set()
 
 async def init_state():
     while Db.connect_attempts < 10:  # connect to database and check if data is fresh
-        result = await Db.query_init_state()
-        if result:
-            for entry in result:
-                await Flt.new_aircraft(entry)
+        messages = await Db.query_init_state()
+        if messages:
+            for entry in messages:
+                _aircraft = await Flt.get_aircraft(entry['hex_ident'])
+                if _aircraft:  # existing aircraft
+                    await _aircraft.update(entry)
+                else:
+                    await Flt.new_aircraft(entry)
 
             return
     print("\nDatabase has invalid data after 10 attempts... closing")
@@ -33,7 +36,6 @@ async def state_update():
     global debug
     while Db.valid_db:
         messages = await Db.query_state()
-
         for entry in messages:
             _aircraft = await Flt.get_aircraft(entry['hex_ident'])
             if _aircraft:  # existing aircraft
@@ -48,11 +50,12 @@ async def state_update():
                 Flt.expired.append(aircraft)
 
         Flt.active = [aircraft for aircraft in Flt.active if aircraft not in Flt.expired]
+        Flt.expired = [aircraft for aircraft in Flt.expired if time.time() - aircraft.live <= 270]
 
         # send state - only non expired and with valid lat lon alt
         if USERS:
-            message = [await x.get_values() for x in Flt.active if x.lon != 0]
-            message.append({'type': 'state'})
+            message = [await x.get_values() for x in Flt.active if x.lon != '']
+            message.append({'action': 'state'})
             await asyncio.wait([user.send(json.dumps(message)) for user in USERS])
 
         # print state to console
@@ -70,6 +73,9 @@ async def state_update():
         await asyncio.sleep(2)
 
 
+async def get_flight_history(websocket, hex_ident):
+    await websocket.send(json.dumps(await Db.flight_history(hex_ident)))
+
 async def register(websocket):
     USERS.add(websocket)
     return
@@ -85,9 +91,10 @@ async def server(websocket, path):
     try:
         async for message in websocket:
             data = json.loads(message)
-            if data["type"] == "history":
-                #  get flight history
-                pass
+            if data["action"] == "history":
+                print(data)
+                await get_flight_history(websocket, data['hex_ident'])
+
             else:
                 logging.error("unsupported event: %s", data)
     finally:
@@ -98,7 +105,7 @@ parser.add_argument("--debug", default=debug, help="Prints a table of the curren
 args = parser.parse_args()
 debug = args.debug
 
-start_server = websockets.serve(server, "localhost", 6789)
+start_server = websockets.serve(server, "192.168.0.24", 6789)
 
 asyncio.get_event_loop().run_until_complete(init_state())
 asyncio.get_event_loop().create_task(state_update())
